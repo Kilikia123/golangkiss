@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	blogv1 "github.com/<твой-github>/blog/gen/proto/blog/v1"
+	blogv1 "golangkiss/gen/proto/blog/v1"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -27,9 +29,9 @@ type storedPost struct {
 type BlogService struct {
 	blogv1.UnimplementedBlogServiceServer
 
-	mu      sync.RWMutex
-	posts   []*storedPost
-	nextID  int64
+	mu     sync.RWMutex
+	posts  []*storedPost
+	nextID int64
 }
 
 func NewBlogService() *BlogService {
@@ -67,7 +69,7 @@ func userIDFromContext(ctx context.Context) (string, error) {
 	}
 
 	values := md.Get("x-user-id")
-	if len(values) == 0 || values[0] == "" {
+	if len(values) == 0 || strings.TrimSpace(values[0]) == "" {
 		return "", status.Error(codes.Unauthenticated, "missing x-user-id header")
 	}
 
@@ -106,9 +108,6 @@ func (s *BlogService) GetPosts(ctx context.Context, req *blogv1.GetPostsRequest)
 	if limit > 100 {
 		limit = 100
 	}
-	if offset < 0 {
-		offset = 0
-	}
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -143,7 +142,7 @@ func (s *BlogService) CreatePost(ctx context.Context, req *blogv1.CreatePostRequ
 		return nil, err
 	}
 
-	if req.GetBody() == "" {
+	if strings.TrimSpace(req.GetBody()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "body is required")
 	}
 
@@ -176,6 +175,9 @@ func (s *BlogService) UpdatePost(ctx context.Context, req *blogv1.UpdatePostRequ
 
 	if req.GetPostId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "post_id is required")
+	}
+	if strings.TrimSpace(req.GetBody()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "body is required")
 	}
 
 	s.mu.Lock()
@@ -225,6 +227,9 @@ func (s *BlogService) LikePost(ctx context.Context, req *blogv1.LikePostRequest)
 	if err != nil {
 		return nil, err
 	}
+	if req.GetPostId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "post_id is required")
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -243,6 +248,9 @@ func (s *BlogService) UnlikePost(ctx context.Context, req *blogv1.UnlikePostRequ
 	userID, err := userIDFromContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if req.GetPostId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "post_id is required")
 	}
 
 	s.mu.Lock()

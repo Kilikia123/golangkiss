@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package blog.v1;
 
-option go_package = "github.com/<твой-github>/blog/gen/blog/v1;blogv1";
+option go_package = "golangkiss/gen/proto/blog/v1;blogv1";
 
 import "google/api/annotations.proto";
 
@@ -18,7 +18,7 @@ message Post {
   string id = 1;
   Author author = 2;
   string body = 3;
-  string created_at = 4; // RFC3339 string
+  string created_at = 4;
   uint64 likes_count = 5;
   bool liked_by_me = 6;
 }

@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	blogv1 "github.com/golangkiss.git/gen/proto/blog/v1"
-	"github.com/golangkiss.git/internal/service"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	blogv1 "golangkiss/gen/proto/blog/v1"
+	"golangkiss/internal/service"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -56,7 +56,7 @@ func main() {
 			}
 			return runtime.DefaultHeaderMatcher(key)
 		}),
-		runtime.WithMetadata(func(ctx context.Context, r *http.Request) metadata.MD {
+		runtime.WithMetadata(func(_ context.Context, r *http.Request) metadata.MD {
 			md := metadata.MD{}
 			if v := r.Header.Get("X-User-Id"); v != "" {
 				md.Set("x-user-id", v)
@@ -77,12 +77,14 @@ func main() {
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", mux)
-
 	rootMux.Handle("/swagger/", http.StripPrefix("/swagger/", http.FileServer(http.Dir("./docs/swagger"))))
-
-	rootMux.HandleFunc("/docs", func(w http.ResponseWriter, r *http.Request) {
+	rootMux.HandleFunc("/docs", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(swaggerHTML))
+	})
+	rootMux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	httpServer := &http.Server{

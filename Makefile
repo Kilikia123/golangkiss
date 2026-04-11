@@ -1,3 +1,5 @@
+.PHONY: proto run tidy
+
 PROTO_DIR=proto
 GEN_DIR=gen
 SWAGGER_DIR=docs/swagger
