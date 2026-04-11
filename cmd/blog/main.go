@@ -11,9 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	blogv1 "golangkiss/gen/proto/blog/v1"
 	"golangkiss/internal/service"
+
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
