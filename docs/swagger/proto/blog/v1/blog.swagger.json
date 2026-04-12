@@ -1,0 +1,322 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "proto/blog/v1/blog.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "BlogService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/api/v1/posts": {
+      "get": {
+        "operationId": "BlogService_GetPosts",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1GetPostsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "BlogService"
+        ]
+      },
+      "post": {
+        "operationId": "BlogService_CreatePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Post"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1CreatePostRequest"
+            }
+          }
+        ],
+        "tags": [
+          "BlogService"
+        ]
+      }
+    },
+    "/api/v1/posts/{postId}": {
+      "delete": {
+        "operationId": "BlogService_DeletePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Empty"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "postId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "BlogService"
+        ]
+      },
+      "put": {
+        "operationId": "BlogService_UpdatePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Post"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "postId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/BlogServiceUpdatePostBody"
+            }
+          }
+        ],
+        "tags": [
+          "BlogService"
+        ]
+      }
+    },
+    "/api/v1/posts/{postId}/like": {
+      "delete": {
+        "operationId": "BlogService_UnlikePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Empty"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "postId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "BlogService"
+        ]
+      },
+      "post": {
+        "operationId": "BlogService_LikePost",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1Empty"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "postId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/BlogServiceLikePostBody"
+            }
+          }
+        ],
+        "tags": [
+          "BlogService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "BlogServiceLikePostBody": {
+      "type": "object"
+    },
+    "BlogServiceUpdatePostBody": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "v1Author": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "nickname": {
+          "type": "string"
+        },
+        "avatarUrl": {
+          "type": "string"
+        }
+      }
+    },
+    "v1CreatePostRequest": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "string"
+        }
+      }
+    },
+    "v1Empty": {
+      "type": "object"
+    },
+    "v1GetPostsResponse": {
+      "type": "object",
+      "properties": {
+        "posts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Post"
+          }
+        }
+      }
+    },
+    "v1Post": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "author": {
+          "$ref": "#/definitions/v1Author"
+        },
+        "body": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "likesCount": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "likedByMe": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

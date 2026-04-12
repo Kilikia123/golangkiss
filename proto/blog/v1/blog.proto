@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package blog.v1;
+
+option go_package = "golangkiss/gen/proto/blog/v1;blogv1";
+
+import "google/api/annotations.proto";
+
+message Empty {}
+
+message Author {
+  string id = 1;
+  string nickname = 2;
+  string avatar_url = 3;
+}
+
+message Post {
+  string id = 1;
+  Author author = 2;
+  string body = 3;
+  string created_at = 4;
+  uint64 likes_count = 5;
+  bool liked_by_me = 6;
+}
+
+message GetPostsRequest {
+  uint32 limit = 1;
+  uint32 offset = 2;
+}
+
+message GetPostsResponse {
+  repeated Post posts = 1;
+}
+
+message CreatePostRequest {
+  string body = 1;
+}
+
+message UpdatePostRequest {
+  string post_id = 1;
+  string body = 2;
+}
+
+message DeletePostRequest {
+  string post_id = 1;
+}
+
+message LikePostRequest {
+  string post_id = 1;
+}
+
+message UnlikePostRequest {
+  string post_id = 1;
+}
+
+service BlogService {
+  rpc GetPosts(GetPostsRequest) returns (GetPostsResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/posts"
+    };
+  }
+
+  rpc CreatePost(CreatePostRequest) returns (Post) {
+    option (google.api.http) = {
+      post: "/api/v1/posts"
+      body: "*"
+    };
+  }
+
+  rpc UpdatePost(UpdatePostRequest) returns (Post) {
+    option (google.api.http) = {
+      put: "/api/v1/posts/{post_id}"
+      body: "*"
+    };
+  }
+
+  rpc DeletePost(DeletePostRequest) returns (Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/posts/{post_id}"
+    };
+  }
+
+  rpc LikePost(LikePostRequest) returns (Empty) {
+    option (google.api.http) = {
+      post: "/api/v1/posts/{post_id}/like"
+      body: "*"
+    };
+  }
+
+  rpc UnlikePost(UnlikePostRequest) returns (Empty) {
+    option (google.api.http) = {
+      delete: "/api/v1/posts/{post_id}/like"
+    };
+  }
+}
