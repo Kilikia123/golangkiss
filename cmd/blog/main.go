@@ -8,11 +8,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	blogv1 "golangkiss/gen/proto/blog/v1"
+	"golangkiss/internal/config"
 	"golangkiss/internal/service"
+	postgresrepo "golangkiss/internal/storage/postgres"
+	redisstore "golangkiss/internal/storage/redis"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/grpc"
@@ -20,34 +24,51 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-const (
-	grpcAddr = ":8080"
-	httpAddr = ":8090"
-)
-
 //go:embed swagger_ui.html
 var swaggerHTML string
 
 func main() {
-	svc := service.NewBlogService()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+
+	ctx := context.Background()
+
+	repo, err := postgresrepo.New(ctx, cfg.PostgresDSN)
+	if err != nil {
+		log.Fatalf("init postgres: %v", err)
+	}
+
+	redisDB, err := strconv.Atoi(cfg.RedisDB)
+	if err != nil {
+		log.Fatalf("parse REDIS_DB: %v", err)
+	}
+	redisClient := redisstore.NewClient(cfg.RedisAddr, cfg.RedisPass, redisDB)
+	likesStore := redisstore.NewLikesStore(redisClient)
+	if err := likesStore.Ping(ctx); err != nil {
+		log.Fatalf("init redis: %v", err)
+	}
+	mainPageCache := redisstore.NewMainPageCache(redisClient, 30*time.Second)
+
+	svc := service.NewBlogService(repo, likesStore, mainPageCache)
 
 	grpcServer := grpc.NewServer()
 	blogv1.RegisterBlogServiceServer(grpcServer, svc)
 
-	lis, err := net.Listen("tcp", grpcAddr)
+	lis, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		log.Fatalf("listen grpc: %v", err)
 	}
 
 	go func() {
-		log.Printf("gRPC server started on %s", grpcAddr)
+		log.Printf("gRPC server started on %s", cfg.GRPCAddr)
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("grpc serve: %v", err)
 		}
 	}()
 
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
+	gatewayCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	mux := runtime.NewServeMux(
@@ -67,9 +88,9 @@ func main() {
 	)
 
 	err = blogv1.RegisterBlogServiceHandlerFromEndpoint(
-		ctx,
+		gatewayCtx,
 		mux,
-		"localhost"+grpcAddr,
+		"localhost"+cfg.GRPCAddr,
 		[]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
 	)
 	if err != nil {
@@ -89,13 +110,13 @@ func main() {
 	})
 
 	httpServer := &http.Server{
-		Addr:    httpAddr,
+		Addr:    cfg.HTTPAddr,
 		Handler: rootMux,
 	}
 
 	go func() {
-		log.Printf("HTTP gateway started on %s", httpAddr)
-		log.Printf("Swagger UI: http://localhost%s/docs", httpAddr)
+		log.Printf("HTTP gateway started on %s", cfg.HTTPAddr)
+		log.Printf("Swagger UI: http://localhost%s/docs", cfg.HTTPAddr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http serve: %v", err)
 		}
