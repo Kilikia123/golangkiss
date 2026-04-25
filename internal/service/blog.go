@@ -3,62 +3,31 @@ package service
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	blogv1 "golangkiss/gen/proto/blog/v1"
+	"golangkiss/internal/storage/postgres"
+	rediscache "golangkiss/internal/storage/redis"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
-type storedPost struct {
-	ID        string
-	AuthorID  string
-	Nickname  string
-	AvatarURL string
-	Body      string
-	CreatedAt time.Time
-	LikedBy   map[string]struct{}
-}
-
 type BlogService struct {
 	blogv1.UnimplementedBlogServiceServer
 
-	mu     sync.RWMutex
-	posts  []*storedPost
-	nextID int64
+	repo      *postgres.PostRepository
+	likes     *rediscache.LikesStore
+	mainCache *rediscache.MainPageCache
 }
 
-func NewBlogService() *BlogService {
-	now := time.Now().UTC()
-
+func NewBlogService(repo *postgres.PostRepository, likes *rediscache.LikesStore, mainCache *rediscache.MainPageCache) *BlogService {
 	return &BlogService{
-		posts: []*storedPost{
-			{
-				ID:        "1",
-				AuthorID:  "101",
-				Nickname:  "nikita",
-				AvatarURL: "https://example.com/avatar1.jpg",
-				Body:      "Первый пост в блоге",
-				CreatedAt: now.Add(-2 * time.Hour),
-				LikedBy:   map[string]struct{}{"777": {}},
-			},
-			{
-				ID:        "2",
-				AuthorID:  "102",
-				Nickname:  "masha",
-				AvatarURL: "https://example.com/avatar2.jpg",
-				Body:      "Второй пост в блоге",
-				CreatedAt: now.Add(-1 * time.Hour),
-				LikedBy:   map[string]struct{}{},
-			},
-		},
-		nextID: 3,
+		repo:      repo,
+		likes:     likes,
+		mainCache: mainCache,
 	}
 }
 
@@ -76,20 +45,29 @@ func userIDFromContext(ctx context.Context) (string, error) {
 	return values[0], nil
 }
 
-func toProtoPost(p *storedPost, currentUserID string) *blogv1.Post {
-	_, liked := p.LikedBy[currentUserID]
-
+func toProtoPost(post rediscache.CachedPost, likesInfo rediscache.PostLikeInfo) *blogv1.Post {
 	return &blogv1.Post{
-		Id: p.ID,
+		Id: post.ID,
 		Author: &blogv1.Author{
-			Id:        p.AuthorID,
-			Nickname:  p.Nickname,
-			AvatarUrl: p.AvatarURL,
+			Id:        post.AuthorID,
+			Nickname:  post.Nickname,
+			AvatarUrl: post.AvatarURL,
 		},
-		Body:       p.Body,
-		CreatedAt:  p.CreatedAt.Format(time.RFC3339),
-		LikesCount: uint64(len(p.LikedBy)),
-		LikedByMe:  liked,
+		Body:       post.Body,
+		CreatedAt:  post.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		LikesCount: likesInfo.LikesCount,
+		LikedByMe:  likesInfo.LikedByUser,
+	}
+}
+
+func toCachedPost(post postgres.Post) rediscache.CachedPost {
+	return rediscache.CachedPost{
+		ID:        strconv.FormatUint(post.ID, 10),
+		AuthorID:  post.AuthorID,
+		Nickname:  post.Nickname,
+		AvatarURL: post.AvatarURL,
+		Body:      post.Body,
+		CreatedAt: post.CreatedAt,
 	}
 }
 
@@ -101,7 +79,6 @@ func (s *BlogService) GetPosts(ctx context.Context, req *blogv1.GetPostsRequest)
 
 	limit := int(req.GetLimit())
 	offset := int(req.GetOffset())
-
 	if limit <= 0 {
 		limit = 10
 	}
@@ -109,31 +86,57 @@ func (s *BlogService) GetPosts(ctx context.Context, req *blogv1.GetPostsRequest)
 		limit = 100
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	var posts []rediscache.CachedPost
+	if offset == 0 && limit == 10 {
+		cachedPosts, found, cacheErr := s.mainCache.Get(ctx)
+		if cacheErr != nil {
+			return nil, status.Errorf(codes.Internal, "main page cache error: %v", cacheErr)
+		}
+		if found {
+			posts = cachedPosts
+		} else {
+			dbPosts, repoErr := s.repo.ListPosts(ctx, limit, offset)
+			if repoErr != nil {
+				return nil, status.Errorf(codes.Internal, "list posts: %v", repoErr)
+			}
 
-	postsCopy := make([]*storedPost, len(s.posts))
-	copy(postsCopy, s.posts)
+			posts = make([]rediscache.CachedPost, 0, len(dbPosts))
+			for _, post := range dbPosts {
+				posts = append(posts, toCachedPost(post))
+			}
 
-	sort.Slice(postsCopy, func(i, j int) bool {
-		return postsCopy[i].CreatedAt.After(postsCopy[j].CreatedAt)
-	})
+			if setErr := s.mainCache.Set(ctx, posts); setErr != nil {
+				return nil, status.Errorf(codes.Internal, "save main page cache: %v", setErr)
+			}
+		}
+	} else {
+		dbPosts, repoErr := s.repo.ListPosts(ctx, limit, offset)
+		if repoErr != nil {
+			return nil, status.Errorf(codes.Internal, "list posts: %v", repoErr)
+		}
 
-	if offset >= len(postsCopy) {
-		return &blogv1.GetPostsResponse{Posts: []*blogv1.Post{}}, nil
+		posts = make([]rediscache.CachedPost, 0, len(dbPosts))
+		for _, post := range dbPosts {
+			posts = append(posts, toCachedPost(post))
+		}
 	}
 
-	end := offset + limit
-	if end > len(postsCopy) {
-		end = len(postsCopy)
+	postIDs := make([]string, 0, len(posts))
+	for _, post := range posts {
+		postIDs = append(postIDs, post.ID)
 	}
 
-	result := make([]*blogv1.Post, 0, end-offset)
-	for _, p := range postsCopy[offset:end] {
-		result = append(result, toProtoPost(p, userID))
+	likesInfo, err := s.likes.GetLikeInfo(ctx, postIDs, userID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read likes from redis: %v", err)
 	}
 
-	return &blogv1.GetPostsResponse{Posts: result}, nil
+	response := &blogv1.GetPostsResponse{Posts: make([]*blogv1.Post, 0, len(posts))}
+	for _, post := range posts {
+		response.Posts = append(response.Posts, toProtoPost(post, likesInfo[post.ID]))
+	}
+
+	return response, nil
 }
 
 func (s *BlogService) CreatePost(ctx context.Context, req *blogv1.CreatePostRequest) (*blogv1.Post, error) {
@@ -141,30 +144,25 @@ func (s *BlogService) CreatePost(ctx context.Context, req *blogv1.CreatePostRequ
 	if err != nil {
 		return nil, err
 	}
-
 	if strings.TrimSpace(req.GetBody()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "body is required")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	id := strconv.FormatInt(s.nextID, 10)
-	s.nextID++
-
-	post := &storedPost{
-		ID:        id,
+	post := &postgres.Post{
 		AuthorID:  userID,
 		Nickname:  "user_" + userID,
 		AvatarURL: "https://example.com/default-avatar.jpg",
 		Body:      req.GetBody(),
-		CreatedAt: time.Now().UTC(),
-		LikedBy:   map[string]struct{}{},
+	}
+	if err := s.repo.CreatePost(ctx, post); err != nil {
+		return nil, status.Errorf(codes.Internal, "create post: %v", err)
+	}
+	if err := s.mainCache.Invalidate(ctx); err != nil {
+		return nil, status.Errorf(codes.Internal, "invalidate main page cache: %v", err)
 	}
 
-	s.posts = append(s.posts, post)
-
-	return toProtoPost(post, userID), nil
+	cached := toCachedPost(*post)
+	return toProtoPost(cached, rediscache.PostLikeInfo{PostID: cached.ID}), nil
 }
 
 func (s *BlogService) UpdatePost(ctx context.Context, req *blogv1.UpdatePostRequest) (*blogv1.Post, error) {
@@ -172,7 +170,6 @@ func (s *BlogService) UpdatePost(ctx context.Context, req *blogv1.UpdatePostRequ
 	if err != nil {
 		return nil, err
 	}
-
 	if req.GetPostId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "post_id is required")
 	}
@@ -180,20 +177,35 @@ func (s *BlogService) UpdatePost(ctx context.Context, req *blogv1.UpdatePostRequ
 		return nil, status.Error(codes.InvalidArgument, "body is required")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, p := range s.posts {
-		if p.ID == req.GetPostId() {
-			if p.AuthorID != userID {
-				return nil, status.Error(codes.PermissionDenied, "you can edit only your own posts")
-			}
-			p.Body = req.GetBody()
-			return toProtoPost(p, userID), nil
+	post, err := s.repo.GetPostByID(ctx, req.GetPostId())
+	if err != nil {
+		if err == postgres.ErrPostNotFound {
+			return nil, status.Error(codes.NotFound, "post not found")
 		}
+		return nil, status.Errorf(codes.Internal, "get post: %v", err)
+	}
+	if post.AuthorID != userID {
+		return nil, status.Error(codes.PermissionDenied, "you can edit only your own posts")
 	}
 
-	return nil, status.Error(codes.NotFound, "post not found")
+	updated, err := s.repo.UpdatePostBody(ctx, req.GetPostId(), req.GetBody())
+	if err != nil {
+		if err == postgres.ErrPostNotFound {
+			return nil, status.Error(codes.NotFound, "post not found")
+		}
+		return nil, status.Errorf(codes.Internal, "update post: %v", err)
+	}
+	if err := s.mainCache.Invalidate(ctx); err != nil {
+		return nil, status.Errorf(codes.Internal, "invalidate main page cache: %v", err)
+	}
+
+	likeInfo, err := s.likes.GetLikeInfo(ctx, []string{req.GetPostId()}, userID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read likes from redis: %v", err)
+	}
+
+	cached := toCachedPost(*updated)
+	return toProtoPost(cached, likeInfo[cached.ID]), nil
 }
 
 func (s *BlogService) DeletePost(ctx context.Context, req *blogv1.DeletePostRequest) (*blogv1.Empty, error) {
@@ -201,25 +213,35 @@ func (s *BlogService) DeletePost(ctx context.Context, req *blogv1.DeletePostRequ
 	if err != nil {
 		return nil, err
 	}
-
 	if req.GetPostId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "post_id is required")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for i, p := range s.posts {
-		if p.ID == req.GetPostId() {
-			if p.AuthorID != userID {
-				return nil, status.Error(codes.PermissionDenied, "you can delete only your own posts")
-			}
-			s.posts = append(s.posts[:i], s.posts[i+1:]...)
-			return &blogv1.Empty{}, nil
+	post, err := s.repo.GetPostByID(ctx, req.GetPostId())
+	if err != nil {
+		if err == postgres.ErrPostNotFound {
+			return nil, status.Error(codes.NotFound, "post not found")
 		}
+		return nil, status.Errorf(codes.Internal, "get post: %v", err)
+	}
+	if post.AuthorID != userID {
+		return nil, status.Error(codes.PermissionDenied, "you can delete only your own posts")
 	}
 
-	return nil, status.Error(codes.NotFound, "post not found")
+	if err := s.repo.DeletePost(ctx, req.GetPostId()); err != nil {
+		if err == postgres.ErrPostNotFound {
+			return nil, status.Error(codes.NotFound, "post not found")
+		}
+		return nil, status.Errorf(codes.Internal, "delete post: %v", err)
+	}
+	if err := s.likes.DeletePostData(ctx, req.GetPostId()); err != nil {
+		return nil, status.Errorf(codes.Internal, "delete likes data: %v", err)
+	}
+	if err := s.mainCache.Invalidate(ctx); err != nil {
+		return nil, status.Errorf(codes.Internal, "invalidate main page cache: %v", err)
+	}
+
+	return &blogv1.Empty{}, nil
 }
 
 func (s *BlogService) LikePost(ctx context.Context, req *blogv1.LikePostRequest) (*blogv1.Empty, error) {
@@ -230,18 +252,17 @@ func (s *BlogService) LikePost(ctx context.Context, req *blogv1.LikePostRequest)
 	if req.GetPostId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "post_id is required")
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, p := range s.posts {
-		if p.ID == req.GetPostId() {
-			p.LikedBy[userID] = struct{}{}
-			return &blogv1.Empty{}, nil
+	if _, err := s.repo.GetPostByID(ctx, req.GetPostId()); err != nil {
+		if err == postgres.ErrPostNotFound {
+			return nil, status.Error(codes.NotFound, "post not found")
 		}
+		return nil, status.Errorf(codes.Internal, "get post: %v", err)
 	}
 
-	return nil, status.Error(codes.NotFound, "post not found")
+	if err := s.likes.LikePost(ctx, req.GetPostId(), userID); err != nil {
+		return nil, status.Errorf(codes.Internal, "like post: %v", err)
+	}
+	return &blogv1.Empty{}, nil
 }
 
 func (s *BlogService) UnlikePost(ctx context.Context, req *blogv1.UnlikePostRequest) (*blogv1.Empty, error) {
@@ -252,22 +273,19 @@ func (s *BlogService) UnlikePost(ctx context.Context, req *blogv1.UnlikePostRequ
 	if req.GetPostId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "post_id is required")
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, p := range s.posts {
-		if p.ID == req.GetPostId() {
-			delete(p.LikedBy, userID)
-			return &blogv1.Empty{}, nil
+	if _, err := s.repo.GetPostByID(ctx, req.GetPostId()); err != nil {
+		if err == postgres.ErrPostNotFound {
+			return nil, status.Error(codes.NotFound, "post not found")
 		}
+		return nil, status.Errorf(codes.Internal, "get post: %v", err)
 	}
 
-	return nil, status.Error(codes.NotFound, "post not found")
+	if err := s.likes.UnlikePost(ctx, req.GetPostId(), userID); err != nil {
+		return nil, status.Errorf(codes.Internal, "unlike post: %v", err)
+	}
+	return &blogv1.Empty{}, nil
 }
 
 func (s *BlogService) DebugString() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return fmt.Sprintf("posts=%d", len(s.posts))
+	return fmt.Sprintf("blog service: postgres + redis")
 }
