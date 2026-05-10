@@ -1,0 +1,58 @@
+services:
+  blog:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: blog-service
+    environment:
+      GRPC_ADDR: ":8080"
+      HTTP_ADDR: ":8090"
+      POSTGRES_DSN: "host=postgres port=5432 user=blog password=blog dbname=blog sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      REDIS_DB: "0"
+      REDIS_PASSWORD: ""
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: blog-postgres
+    environment:
+      POSTGRES_USER: blog
+      POSTGRES_PASSWORD: blog
+      POSTGRES_DB: blog
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blog -d blog"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: blog-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
